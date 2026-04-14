@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Mac/Linux terminalinde npm'in bulanamama ihtimaline karşı yolları dahil et
+export PATH=$PATH:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin
+
 # Renk paleti
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
