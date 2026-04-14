@@ -1,4 +1,5 @@
 const recipientManager = require('./recipient_manager');
+const { generateWAMessageContent, generateWAMessageFromContent } = require('@whiskeysockets/baileys');
 
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
@@ -49,6 +50,29 @@ async function sendBulkWithProgress(sock, contacts, message, socket, delayRange,
         }
         if(socket) socket.emit('log', { type, message, progress });
     };
+
+    // 🔴 1. WhatsApp'a Medyayı TEK SEFER Yükleme İşlemi (Relay Mimarisi) 🔴
+    let preUploadedMedia = [];
+    if (mediaFiles && mediaFiles.length > 0) {
+        addLog('info', `[!] Medya dosyaları WhatsApp'a şifrelenip sadece 1 kereliğine yükleniyor...`);
+        for (let file of mediaFiles) {
+            try {
+                const options = {};
+                if (file.mimetype.startsWith('image/')) options.image = { url: file.path };
+                else if (file.mimetype.startsWith('video/')) options.video = { url: file.path };
+                else continue;
+                
+                // generateWAMessageContent sadece 1 kere sunucuya yükleyip MediaKey döndürür
+                const mediaContent = await generateWAMessageContent(options, { upload: sock.waUploadToServer });
+                preUploadedMedia.push({ type: options.image ? 'image' : 'video', content: mediaContent });
+                
+                addLog('success', `[✅] Yükleme Tamamlandı: ${file.name}`);
+            } catch(e) {
+                addLog('error', `❌ Medya Yükleme Hatası (${file.name}): ${e.message}`);
+            }
+        }
+        addLog('info', `🚀 Medyalar hazır. Tekli aktarım ile asıl gönderim başlıyor...`);
+    }
 
     for (let i = 0; i < contacts.length; i++) {
         const sentToday = recipientManager.getDailyCount();
@@ -122,16 +146,25 @@ async function sendBulkWithProgress(sock, contacts, message, socket, delayRange,
             await delay(Math.floor(Math.random() * 4000) + 2000);
             await sock.sendPresenceUpdate('paused', phone);
 
-            if (mediaFiles.length > 0) {
-                for (let j = 0; j < mediaFiles.length; j++) {
-                    const file = mediaFiles[j];
-                    const options = {};
-                    if (file.mimetype.startsWith('image/')) options.image = { url: file.path };
-                    else if (file.mimetype.startsWith('video/')) options.video = { url: file.path };
+            // Yeni RELAY MESSAGE Mimarisi
+            if (preUploadedMedia.length > 0) {
+                for (let j = 0; j < preUploadedMedia.length; j++) {
+                    const mediaUpload = preUploadedMedia[j];
                     
-                    if (j === 0) options.caption = finalMsg; 
+                    // Medya içerik yapısını Deep Copy yapıp Caption atayacağız (Sadece metin değişecek)
+                    const clonedContent = JSON.parse(JSON.stringify(mediaUpload.content));
+                    
+                    if (j === 0) { 
+                        if (mediaUpload.type === 'image') clonedContent.imageMessage.caption = finalMsg;
+                        else if (mediaUpload.type === 'video') clonedContent.videoMessage.caption = finalMsg;
+                    }
 
-                    await sock.sendMessage(phone, options);
+                    // Taze kopya mesaj oluşturuluyor (WhatsApp sunucusuna medyanın kodu tekrar inlenmeden fırlatılır)
+                    const msg = generateWAMessageFromContent(phone, clonedContent, { userJid: sock.user.id });
+                    
+                    // Doğrudan yolla (Relay)
+                    await sock.relayMessage(phone, msg.message, { messageId: msg.key.id });
+                    
                     await delay(getHumanDelay(2, 5)); 
                 }
             } else {

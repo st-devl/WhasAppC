@@ -324,7 +324,11 @@
             const inner = document.getElementById('media-preview-inner');
             if (mediaFiles.length > 0) {
                 inner.classList.remove('hidden');
-                inner.innerHTML = `<img src="/${mediaFiles[0].path}" class="w-full">`;
+                if (mediaFiles[0].mimetype.startsWith('video/')) {
+                    inner.innerHTML = `<video src="/${mediaFiles[0].path}" class="w-full rounded-t-xl max-h-[200px] object-cover" controls></video>`;
+                } else {
+                    inner.innerHTML = `<img src="/${mediaFiles[0].path}" class="w-full rounded-t-xl object-cover">`;
+                }
             } else inner.classList.add('hidden');
         }
 
@@ -333,7 +337,10 @@
             for (let f of input.files) fd.append('media', f);
             const res = await fetch('/api/upload-media', { method: 'POST', body: fd });
             mediaFiles = await res.json();
-            document.getElementById('media-preview').innerHTML = mediaFiles.map(f => `<img src="/${f.path}" class="w-14 h-14 rounded-xl object-cover">`).join('');
+            document.getElementById('media-preview').innerHTML = mediaFiles.map(f => {
+                if(f.mimetype.startsWith('video/')) return `<div class="w-14 h-14 rounded-xl bg-slate-100 flex items-center justify-center text-xl border-2 border-slate-200">🎬</div>`;
+                else return `<img src="/${f.path}" class="w-14 h-14 rounded-xl object-cover border-2 border-slate-200">`;
+            }).join('');
             updatePreview();
         }
 

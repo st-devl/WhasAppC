@@ -61,9 +61,9 @@ const upload = multer({
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
             'application/vnd.ms-excel', // xls
             'image/jpeg', 'image/png', 'image/webp',
-            'video/mp4', 'video/mpeg'
+            'video/mp4', 'video/mpeg', 'video/webm', 'video/quicktime'
         ];
-        if (allowedMimeTypes.includes(file.mimetype)) {
+        if (file.mimetype.startsWith('video/') || allowedMimeTypes.includes(file.mimetype)) {
             cb(null, true);
         } else {
             cb(new Error('Güvenlik ihlali: Bu dosya türü yüklenemez.'));
