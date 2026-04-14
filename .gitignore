@@ -1,0 +1,18 @@
+.DS_Store
+
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.pyc
+
+# Node/Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Playwright
+test-results/
+playwright-report/

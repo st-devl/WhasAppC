@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhasAppC Pro v1.2.0 - Eksiksiz Pazarlama Paneli</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Public Sans', sans-serif; background-color: #f8fafc; }
+        .whatsapp-bg { background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); opacity: 0.05; position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+        .custom-scroll::-webkit-scrollbar { width: 5px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        .tab-active { color: #16a34a; border-bottom: 3px solid #16a34a; }
+        .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(226, 232, 240, 0.8); }
+        .badge-pulse { animation: pulse-green 2s infinite; }
+        @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); } }
+    </style>
+</head>
+<body class="overflow-hidden h-screen flex flex-col relative">
+    <div class="whatsapp-bg"></div>
+
+    <!-- Navbar -->
+    <nav class="h-20 bg-white border-b flex items-center justify-between px-10 shrink-0 z-40 shadow-sm relative">
+        <div class="flex items-center gap-4">
+            <div class="w-12 h-12 bg-green-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-green-100">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" /></svg>
+            </div>
+            <div>
+                <h1 class="text-xl font-black text-slate-800 tracking-tighter">WhasAppC <span class="text-green-600">PRO</span></h1>
+                <p id="sys-version" class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">v1.2.0 - GOLD EDITION</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-10">
+            <button onclick="switchTab('campaign')" id="tab-campaign" class="tab-active py-7 px-2 text-xs font-black uppercase tracking-widest transition-all">Kampanya Hazırla</button>
+            <button onclick="switchTab('contacts')" id="tab-contacts" class="py-7 px-2 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-all">Rehberim & Kişi Listesi</button>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+                <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                <span class="text-[9px] font-black text-blue-700 uppercase tracking-widest">Enterprise Integrity Modu</span>
+            </div>
+            <div id="status-badge" class="px-6 py-2 rounded-2xl text-[10px] font-black uppercase bg-slate-100 text-slate-400 border border-slate-200">
+                BAĞLANILIYOR...
+            </div>
+        </div>
+    </nav>
+
+    <div class="flex flex-1 overflow-hidden z-10">
+        
+        <aside class="w-[360px] bg-white border-r p-8 flex flex-col items-center shrink-0">
+            <div class="w-full bg-slate-50 rounded-[2rem] p-5 mb-8 border border-slate-100 relative overflow-hidden">
+                <div class="flex items-center gap-3 mb-4">
+                    <div id="conn-indicator" class="w-3 h-3 rounded-full bg-slate-300 animate-pulse"></div>
+                    <span id="qr-status-text" class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bağlantı Durumu</span>
+                </div>
+                <!-- QR Box -->
+                <div id="qr-box" class="flex flex-col items-center justify-center bg-white rounded-2xl p-4 border shadow-inner min-h-[220px]">
+                    <canvas id="qr-canvas" class="hidden"></canvas>
+                    <div id="qr-loading" class="text-[10px] text-slate-300 font-black uppercase">QR Bekleniyor...</div>
+                    <div id="connected-check" class="hidden text-green-500 animate-in zoom-in">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-20 w-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    </div>
+                    <button onclick="resetConnection()" class="mt-4 px-4 py-2 bg-slate-100 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">Bağlantıyı Sıfırla</button>
+                </div>
+            </div>
+
+            <div class="w-[240px] h-[480px] bg-black border-[10px] border-black rounded-[2.5rem] shadow-2xl relative overflow-hidden">
+                <div class="absolute inset-0 whatsapp-bg opacity-10"></div>
+                <div class="h-5 w-1/3 bg-black absolute top-0 left-1/2 -translate-x-1/2 rounded-b-2xl z-20"></div>
+                <div class="absolute inset-0 flex flex-col bg-[#e5ddd5]">
+                    <div class="h-12 bg-[#075e54] flex items-center px-4 pt-3 shrink-0">
+                        <div class="w-7 h-7 rounded-full bg-slate-100 mr-2"></div>
+                        <div class="text-white text-[10px] font-bold">Kampanya Önizleme</div>
+                    </div>
+                    <div class="flex-1 p-3 overflow-y-auto custom-scroll flex flex-col gap-2">
+                        <div id="phone-preview-bubble" class="bg-white p-2 rounded-lg rounded-tl-none shadow-sm max-w-[85%] text-[10px] leading-snug self-start">
+                            <div id="media-preview-inner" class="mb-1 hidden rounded-md overflow-hidden bg-slate-100"></div>
+                            <div id="mes-text" class="whitespace-pre-wrap text-slate-800">Mesajınız...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="flex-1 overflow-hidden flex flex-col">
+            
+            <div id="view-campaign" class="flex-1 p-10 overflow-y-auto custom-scroll">
+                <div class="max-w-4xl mx-auto space-y-10">
+                    <section class="glass-card p-10 rounded-[2.5rem] shadow-xl">
+                        <div class="flex items-center justify-between mb-8">
+                            <h2 class="text-xs font-black uppercase text-slate-400 tracking-[0.2em] flex items-center gap-3">
+                                <span class="w-8 h-8 bg-green-500 text-white rounded-xl flex items-center justify-center shadow-lg shadow-green-100">01</span>
+                                HEDEF & İÇERİK
+                            </h2>
+                            <select id="template-select" onchange="loadTemplate(this.value)" class="text-[10px] font-black border-2 border-slate-100 bg-slate-50 rounded-xl px-4 py-2 outline-none hover:border-green-500 transition-all uppercase tracking-wider">
+                                <option value="">ŞABLONLAR</option>
+                            </select>
+                        </div>
+                        <div class="mb-6">
+                            <select id="campaign-target-group" class="w-full p-4 bg-blue-50/50 border-2 border-blue-100 hover:border-blue-300 rounded-2xl text-[11px] font-black text-blue-900 outline-none uppercase tracking-widest focus:border-blue-500 transition-all cursor-pointer">
+                                <option value="temp">Manuel / Geçici Liste (Rehberim Sekmesindeki)</option>
+                            </select>
+                        </div>
+                        <textarea id="message" oninput="updatePreview()" rows="8" class="w-full p-8 rounded-3xl bg-slate-50 border-2 border-transparent focus:bg-white focus:border-green-500 text-slate-700 shadow-inner outline-none text-lg transition-all" placeholder="Merhaba {{ad}}! {Nasılsınız|İyi günler|Size bir teklifimiz var}{.|!|..}"></textarea>
+                        
+                        <div class="mt-4 p-4 bg-slate-50 border border-slate-100 rounded-2xl flex items-start gap-3">
+                            <span class="text-lg">🛡️</span>
+                            <div>
+                                <h4 class="text-[10px] font-black text-slate-800 uppercase tracking-widest mb-1">Müşteri İletişim İlkeleri</h4>
+                                <p class="text-[10px] text-slate-600 leading-relaxed font-bold italic uppercase">Mesajlarınızı kişiselleştirmek için {{ad}} etiketini kullanabilirsiniz. Sistem, insan davranışlarını taklit eden dinamik zamanlama motoru ile çalışmaktadır.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center gap-4 mt-8">
+                            <button onclick="document.getElementById('template-modal').classList.remove('hidden')" class="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-black transition-all">Şablon Kaydet</button>
+                            <button onclick="document.getElementById('media-input').click()" class="px-8 py-4 bg-white border-2 border-slate-100 text-slate-600 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:border-slate-300 transition-all flex items-center gap-2">🖼️ MEDYA EKLE</button>
+                            <input type="file" id="media-input" multiple accept="image/*,video/*" class="hidden" onchange="uploadMedia(this)">
+                            <div id="media-preview" class="flex gap-2 h-14 items-center pl-4 border-l"></div>
+                        </div>
+                    </section>
+                    <section class="glass-card p-10 rounded-[2.5rem] shadow-xl">
+                        <div class="flex items-center justify-between mb-6">
+                            <h3 class="text-xs font-black uppercase text-slate-400 tracking-widest tracking-[0.1em]">Gelişmiş Hız Ayarları</h3>
+                            <div class="flex flex-wrap items-center gap-6">
+                                <div class="flex items-center gap-3">
+                                    <span class="text-[9px] font-black text-slate-400 uppercase">Gecikme (sn):</span>
+                                    <input id="min-delay" type="number" value="20" class="w-16 p-3 bg-slate-50 border-2 border-slate-100 rounded-xl text-xs font-black text-center outline-none focus:border-blue-500">
+                                    <span class="font-black text-slate-300">-</span>
+                                    <input id="max-delay" type="number" value="90" class="w-16 p-3 bg-slate-50 border-2 border-slate-100 rounded-xl text-xs font-black text-center outline-none focus:border-blue-500">
+                                </div>
+                                <div class="flex items-center gap-3 border-l pl-6">
+                                    <span class="text-[9px] font-black text-slate-400 uppercase">Günlük Limit:</span>
+                                    <input id="daily-limit" type="number" value="50" class="w-20 p-3 bg-blue-50 border-2 border-blue-100 rounded-xl text-xs font-black text-center text-blue-800 outline-none focus:border-blue-500">
+                                </div>
+                            </div>
+                        </div>
+                        <div id="prog-box" class="mb-10 p-8 bg-blue-50 rounded-3xl border border-blue-100 hidden">
+                            <div class="flex items-center justify-between mb-4">
+                                <h4 id="prog-count" class="text-xs font-bold text-blue-800 tracking-tight">İşlem bekleniyor...</h4>
+                                <span id="prog-text" class="text-4xl font-black text-blue-600 tracking-tighter">0%</span>
+                            </div>
+                            <div class="w-full bg-blue-200/50 h-3 rounded-full overflow-hidden">
+                                <div id="prog-bar" class="h-full bg-blue-500 w-0 transition-all duration-1000"></div>
+                            </div>
+                        </div>
+                        <div class="flex gap-4">
+                            <button id="send-btn" disabled onclick="startCampaign()" class="flex-1 py-6 bg-blue-600 text-white rounded-[1.5rem] font-black text-sm uppercase tracking-[0.2em] shadow-xl hover:bg-blue-700 disabled:bg-slate-100 disabled:text-slate-300">BAŞLAT</button>
+                            <button id="stop-btn" onclick="stopCampaign()" class="hidden flex-1 py-6 bg-red-600 text-white rounded-[1.5rem] font-black text-sm uppercase tracking-[0.2em] shadow-xl hover:bg-red-700">DURDUR</button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div id="view-contacts" class="flex-1 p-8 overflow-y-auto custom-scroll hidden">
+                <div class="max-w-[1200px] mx-auto flex gap-8 h-full">
+                    <!-- Gruplar Sidebar -->
+                    <div class="w-72 flex-shrink-0 glass-card rounded-[2.5rem] overflow-hidden shadow-xl flex flex-col max-h-[700px]">
+                        <div class="px-6 py-6 bg-slate-50 border-b flex justify-between items-center">
+                            <h3 class="text-xs font-black uppercase text-slate-400 tracking-widest">Gruplarım</h3>
+                            <button onclick="createGroup()" class="w-8 h-8 flex items-center justify-center bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-all font-bold">+</button>
+                        </div>
+                        <div id="groups-list" class="flex-1 overflow-y-auto custom-scroll p-4 space-y-2">
+                            <!-- JS ile dolacak -->
+                            <div class="p-4 text-center text-[10px] text-slate-400 font-bold">Yükleniyor...</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Sağ Taraf (Kişiler ve Excel) -->
+                    <div class="flex-1 space-y-8">
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                            <div onclick="document.getElementById('excel-input').click()" class="cursor-pointer glass-card p-6 rounded-[2rem] flex flex-col items-center justify-center text-center hover:bg-green-50 transition-all border-2 border-transparent hover:border-green-100">
+                                <span class="text-3xl mb-3">📊</span>
+                                <h4 class="font-black text-slate-800 text-[9px] uppercase tracking-[0.2em]">Excel'den Aktar</h4>
+                                <input type="file" id="excel-input" accept=".xlsx,.xls" class="hidden" onchange="uploadExcel(this)">
+                            </div>
+                            <div onclick="document.getElementById('manual-modal').classList.remove('hidden')" class="cursor-pointer glass-card p-6 rounded-[2rem] flex flex-col items-center justify-center text-center hover:bg-blue-50 transition-all border-2 border-transparent hover:border-blue-100">
+                                <span class="text-3xl mb-3">👤</span>
+                                <h4 class="font-black text-slate-800 text-[9px] uppercase tracking-[0.2em]">Manuel Ekle</h4>
+                            </div>
+                            <div onclick="downloadSample()" class="cursor-pointer glass-card p-6 rounded-[2rem] flex flex-col items-center justify-center text-center hover:bg-slate-50 transition-all border-2 border-transparent hover:border-slate-200">
+                                <span class="text-3xl mb-3">📥</span>
+                                <h4 class="font-black text-slate-800 text-[9px] uppercase tracking-[0.2em]">Örnek İndir</h4>
+                            </div>
+                        </div>
+
+                        <div class="glass-card rounded-[2.5rem] overflow-hidden shadow-xl">
+                            <div class="px-8 py-5 bg-slate-50 border-b flex items-center justify-between">
+                                <h3 class="text-xs font-black uppercase text-slate-400 tracking-widest"><span id="active-group-name" class="text-slate-800">Seçili Grup Yok</span> (<span id="num-badge">0</span>)</h3>
+                                <button id="clear-list-btn" class="px-4 py-2 bg-red-50 text-[9px] font-black text-red-500 uppercase rounded-xl hover:bg-red-100 transition-all">Grubu Temizle</button>
+                            </div>
+                            <div class="max-h-[450px] overflow-y-auto custom-scroll">
+                                <table class="w-full text-left text-sm">
+                                    <thead class="bg-white sticky top-0 z-10 border-b">
+                                        <tr>
+                                            <th class="px-8 py-5 text-[9px] font-black text-slate-400 tracking-widest uppercase">Sıra</th>
+                                            <th class="px-8 py-5 text-[9px] font-black text-slate-400 tracking-widest uppercase">Ad Soyad</th>
+                                            <th class="px-8 py-5 text-[9px] font-black text-slate-400 tracking-widest uppercase">Telefon</th>
+                                            <th class="px-8 py-5 text-center text-[9px] font-black text-slate-400 tracking-widest uppercase">İşlem</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="contacts-table-body" class="divide-y divide-slate-50 bg-white">
+                                        <tr><td colspan="4" class="p-16 text-center text-slate-300 font-bold uppercase text-[10px] tracking-widest">Lütfen Yandan Bir Grup Seçin</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="manual-modal" class="fixed inset-0 bg-slate-900/80 z-[100] hidden flex items-center justify-center backdrop-blur-md">
+        <div class="bg-white rounded-[3rem] p-12 w-[450px]">
+            <h3 class="text-xl font-black mb-8">Yeni Kayıt</h3>
+            <div class="space-y-6">
+                <input type="text" id="manual-name" placeholder="Ad Soyad" class="w-full p-4 bg-slate-50 rounded-2xl border-none outline-none font-bold">
+                <input type="text" id="manual-phone" placeholder="905xxxxxxxxx" class="w-full p-4 bg-slate-50 rounded-2xl border-none outline-none font-bold font-mono">
+            </div>
+            <div class="flex gap-4 mt-10">
+                <button onclick="document.getElementById('manual-modal').classList.add('hidden')" class="flex-1 py-4 font-black text-[10px] text-slate-400 uppercase">İptal</button>
+                <button onclick="saveManualContact()" class="flex-2 py-4 bg-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Ekle</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="template-modal" class="fixed inset-0 bg-slate-900/80 z-[100] hidden flex items-center justify-center backdrop-blur-md">
+        <div class="bg-white rounded-[3rem] p-12 w-[450px]">
+            <h3 class="text-xl font-black mb-8">Şablon Kaydet</h3>
+            <input type="text" id="template-name" placeholder="Şablon Adı" class="w-full p-5 bg-slate-50 rounded-2xl outline-none font-bold">
+            <div class="flex gap-4 mt-8">
+                <button onclick="document.getElementById('template-modal').classList.add('hidden')" class="flex-1 py-4 font-black text-[10px] text-slate-400">İptal</button>
+                <button onclick="saveTemplate()" class="flex-2 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase">Kaydet</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="log-monitor" class="fixed right-10 bottom-32 w-[400px] h-[400px] bg-slate-900 rounded-[2.5rem] shadow-2xl p-8 hidden flex-col z-[50] border border-slate-800">
+        <div class="flex items-center justify-between mb-6">
+            <h3 class="text-[10px] font-black text-slate-500 uppercase tracking-widest">Sistem Logları</h3>
+            <button onclick="toggleLogs()" class="text-slate-500">✕</button>
+        </div>
+        <div id="logs" class="flex-1 overflow-y-auto custom-scroll font-mono text-[10px] text-green-500/80 space-y-2">>> Bekleniyor...</div>
+    </div>
+
+    <script>
+        const socket = io();
+        let currentContacts = [];
+        let templates = [];
+        let mediaFiles = [];
+
+        function switchTab(tab) {
+            document.getElementById('view-campaign').classList.toggle('hidden', tab !== 'campaign');
+            document.getElementById('view-contacts').classList.toggle('hidden', tab !== 'contacts');
+            document.getElementById('tab-campaign').className = (tab === 'campaign' ? 'tab-active' : 'text-slate-400') + ' py-7 px-2 text-xs font-black uppercase tracking-widest transition-all';
+            document.getElementById('tab-contacts').className = (tab === 'contacts' ? 'tab-active' : 'text-slate-400') + ' py-7 px-2 text-xs font-black uppercase tracking-widest transition-all';
+            if(tab === 'contacts') updateContactsTable();
+        }
+
+        socket.on('qr', qr => {
+            const canvas = document.getElementById('qr-canvas');
+            canvas.classList.remove('hidden');
+            document.getElementById('qr-loading').classList.add('hidden');
+            QRCode.toCanvas(canvas, qr, { width: 180, margin: 1 });
+        });
+
+        socket.on('status', status => {
+            const btn = document.getElementById('send-btn');
+            const indicator = document.getElementById('conn-indicator');
+            const txt = document.getElementById('qr-status-text');
+            const badge = document.getElementById('status-badge');
+            
+            if (status === 'connected') {
+                indicator.className = 'w-3 h-3 rounded-full bg-green-500 shadow-lg';
+                txt.innerText = 'BAĞLI';
+                badge.innerText = 'BAĞLI';
+                badge.className = 'px-6 py-2 rounded-2xl text-[10px] font-black uppercase bg-green-50 text-green-600 border border-green-100';
+                document.getElementById('qr-canvas').classList.add('hidden');
+                document.getElementById('connected-check').classList.remove('hidden');
+                btn.disabled = false;
+            } else {
+                indicator.className = 'w-3 h-3 rounded-full bg-slate-100 animate-pulse';
+                txt.innerText = 'BAĞLI DEĞİL';
+                badge.innerText = 'BAĞLI DEĞİL';
+                btn.disabled = true;
+            }
+        });
+
+        socket.on('log', data => {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            const colorClass = data.type === 'error' ? 'text-red-400' : (data.type === 'success' ? 'text-green-400' : (data.type === 'wait' ? 'text-amber-400' : 'text-slate-400'));
+            div.className = colorClass;
+            div.innerText = `> ${data.message}`;
+            logs.prepend(div);
+
+            if (data.progress !== undefined) {
+                document.getElementById('prog-box').classList.remove('hidden');
+                document.getElementById('prog-bar').style.width = `${data.progress}%`;
+                document.getElementById('prog-text').innerText = `${Math.round(data.progress)}%`;
+                document.getElementById('prog-count').innerText = data.message;
+            }
+
+            if (data.message.includes('tamamlandı') || data.message.includes('durduruldu')) {
+                document.getElementById('stop-btn').classList.add('hidden');
+                document.getElementById('send-btn').classList.remove('hidden');
+                setTimeout(() => {
+                    if (data.message.includes('tamamlandı')) {
+                        document.getElementById('prog-box').classList.add('hidden');
+                        document.getElementById('prog-bar').style.width = '0%';
+                    }
+                }, 3000);
+            }
+        });
+
+        function updatePreview() {
+            const text = document.getElementById('message').value || "Mesajınız...";
+            document.getElementById('mes-text').innerText = text.replace(/{{ad}}/g, 'Sayın Ahmet Yılmaz').replace(/{([^{}]+)}/g, (m, c) => c.split('|')[0]);
+            const inner = document.getElementById('media-preview-inner');
+            if (mediaFiles.length > 0) {
+                inner.classList.remove('hidden');
+                inner.innerHTML = `<img src="/${mediaFiles[0].path}" class="w-full">`;
+            } else inner.classList.add('hidden');
+        }
+
+        async function uploadMedia(input) {
+            const fd = new FormData();
+            for (let f of input.files) fd.append('media', f);
+            const res = await fetch('/api/upload-media', { method: 'POST', body: fd });
+            mediaFiles = await res.json();
+            document.getElementById('media-preview').innerHTML = mediaFiles.map(f => `<img src="/${f.path}" class="w-14 h-14 rounded-xl object-cover">`).join('');
+            updatePreview();
+        }
+
+        async function uploadExcel(input) {
+            const fd = new FormData(); fd.append('excel', input.files[0]);
+            const res = await fetch('/api/upload-excel', { method: 'POST', body: fd });
+            const adds = await res.json();
+            currentContacts = [...currentContacts, ...adds];
+            updateContactsTable();
+            saveCurrentContactsToBackend();
+        }
+
+        function saveManualContact() {
+            const name = document.getElementById('manual-name').value;
+            const phone = document.getElementById('manual-phone').value;
+            if (name && phone) {
+                currentContacts.push({ name, phone });
+                document.getElementById('manual-modal').classList.add('hidden');
+                updateContactsTable();
+                saveCurrentContactsToBackend();
+                document.getElementById('manual-name').value = '';
+                document.getElementById('manual-phone').value = '';
+            }
+        }
+
+        async function resetConnection() {
+            if(confirm("Bağlantı sıfırlanacak. Sayfa yenilenecektir. Emin misiniz?")) {
+                await fetch('/api/reset-session', { method: 'POST' });
+                window.location.reload();
+            }
+        }
+
+        function downloadSample() { window.location.href = '/api/download-sample'; }
+        
+        function clearList() { 
+            if (window.confirm("Tüm rehber silinecek. Emin misiniz?")) { 
+                currentContacts = []; 
+                updateContactsTable(); 
+                saveCurrentContactsToBackend();
+            } 
+        }
+
+        function removeContact(index) { 
+            currentContacts.splice(index, 1); 
+            updateContactsTable(); 
+            saveCurrentContactsToBackend();
+        }
+
+        // Buton tanımlamalarını sağlama al
+        window.clearList = clearList;
+        window.removeContact = removeContact;
+
+        function updateContactsTable() {
+            const tbody = document.getElementById('contacts-table-body');
+            document.getElementById('num-badge').innerText = currentContacts.length;
+            if (currentContacts.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="p-20 text-center text-slate-300 font-bold uppercase text-[10px]">Rehber Boş</td></tr>';
+                return;
+            }
+            tbody.innerHTML = currentContacts.map((c, i) => `
+                <tr class="hover:bg-slate-50 transition-all">
+                    <td class="px-10 py-5 text-[10px] font-black text-slate-400">${i + 1}</td>
+                    <td class="px-10 py-5 font-bold text-slate-700">${c.name || ''} ${c.surname || ''}</td>
+                    <td class="px-10 py-5 font-mono text-slate-600">${c.phone}</td>
+                    <td class="p-5 text-center">
+                        <button onclick="removeContact(${i})" class="w-10 h-10 flex items-center justify-center mx-auto bg-red-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </td>
+                </tr>`).join('');
+        }
+
+        async function initTemplates() {
+            const vRes = await fetch('/api/version').catch(() => ({json: () => ({version: '1.2.0'})}));
+            const vData = await vRes.json();
+            document.getElementById('sys-version').innerText = `v${vData.version} - GOLD EDITION`;
+            const res = await fetch('/api/templates');
+            templates = await res.json();
+            document.getElementById('template-select').innerHTML = '<option value="">ŞABLONLAR</option>' + templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+        }
+
+        function loadTemplate(id) {
+            const t = templates.find(item => item.id == id);
+            if (t) { document.getElementById('message').value = t.text; updatePreview(); }
+        }
+
+        async function saveTemplate() {
+            const name = document.getElementById('template-name').value;
+            const text = document.getElementById('message').value;
+            await fetch('/api/templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, text }) });
+            initTemplates();
+            document.getElementById('template-modal').classList.add('hidden');
+        }
+
+        function startCampaign() {
+            const text = document.getElementById('message').value;
+            const targetGroupId = document.getElementById('campaign-target-group').value;
+            
+            let targetContacts = currentContacts;
+            if (targetGroupId !== 'temp') {
+                const selectedObj = groups.find(g => g.id === targetGroupId);
+                if (selectedObj) {
+                    targetContacts = selectedObj.contacts;
+                }
+            }
+
+            if (!text || targetContacts.length === 0) return alert("Mesaj içeriği ve seçili hedef grup bo olamaz.");
+            document.getElementById('send-btn').classList.add('hidden');
+            document.getElementById('stop-btn').classList.remove('hidden');
+            
+            const delayRange = [
+                parseInt(document.getElementById('min-delay').value), 
+                parseInt(document.getElementById('max-delay').value)
+            ];
+            const dailyLimit = parseInt(document.getElementById('daily-limit').value);
+            
+            socket.emit('start-bulk', { 
+                contacts: targetContacts, 
+                message: text, 
+                delayRange,
+                dailyLimit
+            });
+        }
+
+        function stopCampaign() { socket.emit('stop-bulk'); }
+        function toggleLogs() { document.getElementById('log-monitor').classList.toggle('hidden'); }
+        
+        let groups = [];
+        let activeGroupId = null;
+
+        async function loadGroups() {
+            const res = await fetch('/api/groups');
+            groups = await res.json();
+            renderGroupsSidebar();
+        }
+
+        function renderGroupsSidebar() {
+            const container = document.getElementById('groups-list');
+            if (groups.length === 0) {
+                container.innerHTML = '<div class="p-4 text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest">Henüz grup yok</div>';
+            } else {
+                container.innerHTML = groups.map(g => `
+                    <div class="flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${activeGroupId === g.id ? 'bg-blue-50 border border-blue-200 shadow-sm' : 'hover:bg-slate-50 border border-transparent'}" onclick="selectGroup('${g.id}')">
+                        <span class="text-[11px] font-black text-slate-700 truncate w-32 tracking-wider" title="${g.name}">${g.name}</span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-[9px] font-black bg-blue-100 text-blue-600 px-2 py-1 rounded-md">${g.contacts.length}</span>
+                            <button onclick="event.stopPropagation(); deleteGroup('${g.id}')" class="text-red-300 hover:text-red-500 transition-all font-black hover:scale-110">✖</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            let targetSelect = document.getElementById('campaign-target-group');
+            if (targetSelect) {
+                let currentVal = targetSelect.value;
+                targetSelect.innerHTML = `<option value="temp">Manuel / Geçici Liste (Rehberim Sekmesi)</option>` + 
+                    groups.map(g => `<option value="${g.id}">Grup: ${g.name} (${g.contacts.length} Kişi)</option>`).join('');
+                if ([...targetSelect.options].some(o => o.value === currentVal)) {
+                    targetSelect.value = currentVal;
+                }
+            }
+        }
+
+        async function createGroup() {
+            const name = prompt("Yeni grup adı (Örn: İş Arkadaşları):");
+            if (!name || name.trim() === '') return;
+            const res = await fetch('/api/groups', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ name: name.trim() })
+            });
+            const newGroup = await res.json();
+            groups.push(newGroup);
+            selectGroup(newGroup.id);
+        }
+
+        async function deleteGroup(id) {
+            if (!confirm("Bu grubu ve içindeki kişileri silmek istediğinize emin misiniz?")) return;
+            await fetch(`/api/groups/${id}`, { method: 'DELETE' });
+            groups = groups.filter(g => g.id !== id);
+            if (activeGroupId === id) {
+                activeGroupId = null;
+                currentContacts = [];
+                document.getElementById('active-group-name').innerText = "Seçili Grup Yok";
+                updateContactsTable();
+            }
+            renderGroupsSidebar();
+        }
+
+        function selectGroup(id) {
+            activeGroupId = id;
+            const group = groups.find(g => g.id === id);
+            currentContacts = group.contacts || [];
+            document.getElementById('active-group-name').innerText = group.name;
+            updateContactsTable();
+            renderGroupsSidebar();
+        }
+
+        async function saveCurrentContactsToBackend() {
+            if (!activeGroupId) return; // Geçici liste modundaysa API'ye kaydetme
+            await fetch(`/api/groups/${activeGroupId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ contacts: currentContacts })
+            });
+            const group = groups.find(g => g.id === activeGroupId);
+            if(group) {
+                group.contacts = [...currentContacts];
+                renderGroupsSidebar();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('clear-list-btn').addEventListener('click', clearList);
+            initTemplates();
+            loadGroups();
+        });
+        switchTab('campaign');
+    </script>
+</body>
+</html>
