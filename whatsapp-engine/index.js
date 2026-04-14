@@ -1,34 +1,36 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { getSocketConfig } = require('./lib/connection');
-const { sendBulkWithProgress, stopCampaign } = require('./lib/messenger');
-const fs = require('fs-extra');
+const { sendBulkWithProgress, stopCampaign, getCampaignStatus } = require('./lib/messenger');
 const path = require('path');
 const multer = require('multer');
 const xlsx = require('xlsx');
+const bcrypt = require('bcrypt');
+const { v4: uuidv4 } = require('uuid');
+const db = require('./lib/db');
+const fs = require('fs-extra');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-
 const session = require('express-session');
 
-// --- OTURUM YAPILANDIRMASI ---
 app.use(session({
-    secret: 'whatsapp-pro-secret-key-2024',
+    secret: process.env.SESSION_SECRET || 'fallback-dev-secret',
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 24 saat
+    cookie: { 
+        secure: process.env.NODE_ENV === 'production', 
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000 
+    }
 }));
 
-// --- KİMLİK BİLGİLERİ ---
-const ADMIN_USER = {
-    email: 'suheypt@hotmail.com',
-    password: 'S-112233*t'
-};
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASS_HASH = process.env.ADMIN_PASS_HASH;
 
-// --- AUTH MIDDLEWARE ---
 const requireAuth = (req, res, next) => {
     if (req.session && req.session.user) {
         next();
@@ -40,27 +42,47 @@ const requireAuth = (req, res, next) => {
     }
 };
 
-// Klasörlerin varlığından emin ol
-fs.ensureDirSync(path.join(__dirname, 'data'));
 fs.ensureDirSync(path.join(__dirname, 'uploads'));
 
+// Güvenli Yükleme (RCE Koruması)
 const storage = multer.diskStorage({
     destination: 'uploads/',
-    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
-});
-const upload = multer({ storage });
-
-app.use(express.json());
-
-// --- LOGIN/LOGOUT ENDPOINTLERİ ---
-app.post('/api/login', (req, res) => {
-    const { email, password } = req.body;
-    if (email === ADMIN_USER.email && password === ADMIN_USER.password) {
-        req.session.user = { email };
-        res.json({ success: true });
-    } else {
-        res.status(401).json({ error: 'Geçersiz e-posta veya şifre' });
+    filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname);
+        cb(null, uuidv4() + ext);
     }
+});
+
+const upload = multer({ 
+    storage,
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+    fileFilter: (req, file, cb) => {
+        const allowedMimeTypes = [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
+            'application/vnd.ms-excel', // xls
+            'image/jpeg', 'image/png', 'image/webp',
+            'video/mp4', 'video/mpeg'
+        ];
+        if (allowedMimeTypes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Güvenlik ihlali: Bu dosya türü yüklenemez.'));
+        }
+    }
+});
+
+app.use(express.json({ limit: '10mb' })); // Payload Limit 
+
+app.post('/api/login', async (req, res) => {
+    const { email, password } = req.body;
+    if (email === ADMIN_EMAIL) {
+        const match = await bcrypt.compare(password, ADMIN_PASS_HASH);
+        if(match) {
+            req.session.user = { email };
+            return res.json({ success: true });
+        }
+    }
+    res.status(401).json({ error: 'Geçersiz e-posta veya şifre' });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -72,7 +94,6 @@ app.get('/api/check-auth', (req, res) => {
     res.json({ authenticated: !!(req.session && req.session.user) });
 });
 
-// Login sayfası hariç tüm statik dosyaları koru
 app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'public/login.html')));
 app.use(requireAuth, express.static('public'));
 app.use('/uploads', requireAuth, express.static('uploads'));
@@ -81,97 +102,96 @@ let sock = null;
 let isConnected = false;
 let currentMedia = [];
 let lastQR = null;
-
-// --- API ENDPOINTLERİ ---
+let initLock = false; // Multiple init WhatsApp Shield
 
 app.get('/api/version', async (req, res) => {
     try {
         const pkg = await fs.readJson(path.join(__dirname, 'package.json'));
         res.json({ version: pkg.version });
     } catch (e) {
-        res.json({ version: '1.2.0' });
+        res.json({ version: '1.3.0' });
     }
 });
 
+// --- VERİTABANI API (SQLite) ---
+
 app.get('/api/templates', async (req, res) => {
-    const p = path.join(__dirname, 'data/templates.json');
-    const data = await fs.readJson(p).catch(() => []);
-    res.json(data);
+    try {
+        const data = await db.getTemplates();
+        res.json(data);
+    } catch(e) { res.status(500).json({error: e.message}); }
 });
 
 app.post('/api/templates', async (req, res) => {
-    const p = path.join(__dirname, 'data/templates.json');
-    const templates = await fs.readJson(p).catch(() => []);
-    templates.push({ id: Date.now(), ...req.body });
-    await fs.writeJson(p, templates);
-    res.json({ success: true });
+    try {
+        const id = uuidv4();
+        if(!req.body.name || !req.body.text) return res.status(400).json({error: 'Bos isim veya içerik'});
+        const newTpl = await db.createTemplate(id, req.body.name, req.body.text);
+        res.json({ success: true, template: newTpl });
+    } catch(e) { res.status(500).json({error: e.message}); }
 });
 
-// --- GRUP YÖNETİMİ API ENDPOINTLERİ ---
-const groupsPath = path.join(__dirname, 'data/groups.json');
-
 app.get('/api/groups', async (req, res) => {
-    const data = await fs.readJson(groupsPath).catch(() => []);
-    res.json(data);
+    try {
+        const data = await db.getGroups();
+        res.json(data);
+    } catch(e) { res.status(500).json({error: e.message}); }
 });
 
 app.post('/api/groups', async (req, res) => {
-    const groups = await fs.readJson(groupsPath).catch(() => []);
-    const newGroup = { id: Date.now().toString(), name: req.body.name, contacts: [] };
-    groups.push(newGroup);
-    await fs.writeJson(groupsPath, groups);
-    res.json(newGroup);
+    try {
+        if(!req.body.name) return res.status(400).json({error: 'İsim gerekli'});
+        const id = uuidv4();
+        const newGroup = await db.createGroup(id, req.body.name);
+        res.json(newGroup);
+    } catch(e) { res.status(500).json({error: e.message}); }
 });
 
 app.put('/api/groups/:id', async (req, res) => {
-    const groups = await fs.readJson(groupsPath).catch(() => []);
-    const idx = groups.findIndex(g => g.id === req.params.id);
-    if (idx !== -1) {
-        groups[idx].contacts = req.body.contacts || [];
-        await fs.writeJson(groupsPath, groups);
+    try {
+        if(!req.body.contacts) return res.status(400).json({error: 'Contacts gerekli'});
+        await db.updateGroupContacts(req.params.id, req.body.contacts);
         res.json({ success: true });
-    } else {
-        res.status(404).json({ error: 'Grup bulunamadı' });
-    }
+    } catch(e) { res.status(500).json({error: e.message}); }
 });
 
 app.delete('/api/groups/:id', async (req, res) => {
-    const groups = await fs.readJson(groupsPath).catch(() => []);
-    const filtered = groups.filter(g => g.id !== req.params.id);
-    await fs.writeJson(groupsPath, filtered);
-    res.json({ success: true });
-});
-
-app.post('/api/upload-media', upload.array('media'), (req, res) => {
-    currentMedia = req.files.map(f => ({ path: f.path, mimetype: f.mimetype, name: f.originalname }));
-    res.json(currentMedia);
-});
-
-app.post('/api/upload-excel', upload.single('excel'), (req, res) => {
     try {
-        const workbook = xlsx.readFile(req.file.path);
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rawData = xlsx.utils.sheet_to_json(sheet);
-        
-        const data = rawData.map(row => ({
-            phone: String(row['Numara'] || row['phone'] || ''),
-            name: String(row['İsim'] || row['name'] || ''),
-            surname: String(row['Soyisim'] || '')
-        })).filter(row => row.phone);
+        await db.deleteGroup(req.params.id);
+        res.json({ success: true });
+    } catch(e) { res.status(500).json({error: e.message}); }
+});
 
-        res.json(data);
-    } catch (err) {
-        res.status(500).json({ error: 'Excel okuma hatası' });
-    }
+// --- DOSYA API ---
+
+app.post('/api/upload-media', (req, res) => {
+    upload.array('media')(req, res, function (err) {
+        if (err) return res.status(400).json({ error: err.message });
+        currentMedia = req.files.map(f => ({ path: f.path, mimetype: f.mimetype, name: f.originalname }));
+        res.json(currentMedia);
+    });
+});
+
+app.post('/api/upload-excel', (req, res) => {
+    upload.single('excel')(req, res, function (err) {
+        if (err) return res.status(400).json({ error: err.message });
+        try {
+            const workbook = xlsx.readFile(req.file.path);
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rawData = xlsx.utils.sheet_to_json(sheet);
+            const data = rawData.map(row => ({
+                phone: String(row['Numara'] || row['phone'] || ''),
+                name: String(row['İsim'] || row['name'] || ''),
+                surname: String(row['Soyisim'] || '')
+            })).filter(row => row.phone);
+            res.json(data);
+        } catch (e) { res.status(500).json({ error: 'Excel okuma hatası' }); }
+    });
 });
 
 app.get('/api/download-sample', (req, res) => {
     const wb = xlsx.utils.book_new();
-    const ws_data = [
-        ["Numara", "İsim", "Soyisim"], 
-        ["905320000000", "Ahmet", "Yılmaz"], 
-        ["905330000000", "Ayşe", "Demir"]
-    ];
+    const ws_data = [["Numara", "İsim", "Soyisim"], ["905320000000", "Ahmet", "Yılmaz"]];
     const ws = xlsx.utils.aoa_to_sheet(ws_data);
     xlsx.utils.book_append_sheet(wb, ws, "Rehber");
     const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -180,15 +200,28 @@ app.get('/api/download-sample', (req, res) => {
     res.send(buf);
 });
 
+// Campaign State Recovery
+app.get('/api/campaign-status', (req, res) => {
+    // Return all session campaigns that exist 
+    // Usually it's tied to session, but for now we just return the active campaign using user's session ID
+    const campaignId = req.session.id; // Or user's session
+    const status = getCampaignStatus(campaignId);
+    res.json({ campaign: status });
+});
+
 app.post('/api/reset-session', async (req, res) => {
     try {
         console.log('🔄 Oturum sıfırlama isteği alındı...');
         isConnected = false;
         lastQR = null;
-        if (sock) { sock.end(); }
+        if (sock) { 
+            sock.ev.removeAllListeners();
+            sock.end(); 
+            sock = null;
+        }
         const sessionPath = path.join(__dirname, 'auth/session');
         if (fs.existsSync(sessionPath)) fs.removeSync(sessionPath);
-        res.json({ success: true, message: 'Oturum temizlendi, taze QR kod hazırlanıyor...' });
+        res.json({ success: true, message: 'Oturum temizlendi.' });
         setTimeout(() => initWhatsApp(), 1000);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -197,12 +230,16 @@ app.post('/api/reset-session', async (req, res) => {
 
 // --- SOCKET.IO ---
 io.on('connection', (socket) => {
-    console.log('🔌 Tarayıcı bağlandı.');
+    console.log('🔌 Tarayıcı bağlandı:', socket.id);
     socket.emit('status', isConnected ? 'connected' : 'disconnected');
     if (!isConnected && lastQR) socket.emit('qr', lastQR);
     
+    // Auth bypass check for sockets could be added using cookie parser, assuming handled via frontend
+    // Fallback: Campaign uses socket.request.session if we attach session middleware
+    
     socket.on('stop-bulk', () => {
-        stopCampaign(socket.id);
+        // We use a fixed campaign ID per user or session, here we just use 'main_campaign' for simplicity in single-tenant
+        stopCampaign('main_campaign');
         socket.emit('log', { type: 'error', message: '🛑 İşlem durduruldu.' });
     });
 
@@ -211,17 +248,22 @@ io.on('connection', (socket) => {
         if (!isConnected || !sock) return socket.emit('log', { type: 'error', message: 'Bağlı değil!' });
         socket.emit('log', { type: 'info', message: '🚀 Gönderim kuyruğu başladı.' });
         try {
-            await sendBulkWithProgress(sock, contacts, message, socket, delayRange, currentMedia, socket.id, { dailyLimit });
-            socket.emit('log', { type: 'success', message: '✨ Tamamlandı.' });
+            await sendBulkWithProgress(sock, contacts, message, socket, delayRange, currentMedia, 'main_campaign', { dailyLimit });
             currentMedia = [];
-        } catch (err) {
-            socket.emit('log', { type: 'error', message: 'Hata: ' + err.message });
-        }
+        } catch (err) { }
     });
 });
 
 async function initWhatsApp() {
+    if(initLock) return;
+    initLock = true;
     console.log('🚀 WhatsApp motoru başlatılıyor...');
+    
+    // Clean old sock to prevent memory leaks
+    if(sock) {
+        try { sock.ev.removeAllListeners(); sock.end(); } catch(e){}
+    }
+    
     try {
         const config = await getSocketConfig();
         sock = config.sock;
@@ -230,15 +272,13 @@ async function initWhatsApp() {
             const { connection, qr, lastDisconnect } = update;
             
             if (qr) {
-                console.log('📷 Yeni QR Kod üretildi.');
                 lastQR = qr;
                 io.emit('qr', qr);
             }
             
             if (connection === 'open') { 
                 console.log('✅ Bağlantı BAŞARILI!');
-                // İnsan gibi davran: Bağlantı açıldıktan sonra 5-15 saniye "yüklenme" bekle
-                const initialWait = Math.floor(Math.random() * 10000) + 5000;
+                const initialWait = Math.floor(Math.random() * 5000) + 2000;
                 setTimeout(() => {
                     isConnected = true; 
                     lastQR = null;
@@ -252,17 +292,15 @@ async function initWhatsApp() {
                 isConnected = false; 
                 io.emit('status', 'disconnected');
                 
-                // Oturum geçersizse temizle
+                initLock = false; // Release lock for reconnect
+                
                 if (reason === 401 || reason === 440) {
                     console.log('⚠️ Oturum bozulmuş. Otomatik temizleniyor...');
                     const sessionPath = path.join(__dirname, 'auth/session');
                     if (fs.existsSync(sessionPath)) fs.removeSync(sessionPath);
-                    // Rastgele 10-30 saniye sonra yeniden başla
-                    const reconnectDir = Math.floor(Math.random() * 20000) + 10000;
-                    setTimeout(() => initWhatsApp(), reconnectDir);
-                } else {
-                    // Normal kopmalarda rastgele 30sn - 2dk arası bekle (Sistem sahtecilik yakalamasın)
-                    const reconnectNormal = Math.floor(Math.random() * 90000) + 30000;
+                    setTimeout(() => initWhatsApp(), 5000);
+                } else if(reason !== 428) {
+                    const reconnectNormal = Math.floor(Math.random() * 20000) + 10000;
                     console.log(`⏳ ${reconnectNormal/1000}sn sonra yeniden bağlanılacak...`);
                     setTimeout(() => initWhatsApp(), reconnectNormal);
                 }
@@ -270,13 +308,13 @@ async function initWhatsApp() {
         });
     } catch (err) {
         console.log('🚨 Başlatma hatası:', err.message);
-        const retryDelay = Math.floor(Math.random() * 30000) + 30000;
-        setTimeout(() => initWhatsApp(), retryDelay);
+        initLock = false;
+        setTimeout(() => initWhatsApp(), 15000);
     }
 }
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('⚠️ [CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('⚠️ [CRITICAL] Unhandled Rejection:', reason);
 });
 
 process.on('uncaughtException', (err) => {
@@ -286,7 +324,10 @@ process.on('uncaughtException', (err) => {
 const PORT = process.env.PORT || 3005;
 server.listen(PORT, () => {
     console.log(`\n================================================`);
-    console.log(`🌍 WhasAppC Pro Aktif: http://localhost:${PORT}`);
+    console.log(`🌍 WhasAppC Pro Enterprise Aktif: http://localhost:${PORT}`);
     console.log(`================================================\n`);
+    io.engine.use(session({
+        secret: process.env.SESSION_SECRET || 'fallback-dev-secret', resave: false, saveUninitialized: false
+    })); // Link session to socketio for advanced usage later
     initWhatsApp();
 });

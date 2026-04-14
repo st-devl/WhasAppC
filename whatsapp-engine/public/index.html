@@ -548,10 +548,38 @@
             }
         }
 
+        async function checkActiveCampaign() {
+            try {
+                const res = await fetch('/api/campaign-status');
+                const data = await res.json();
+                if (data.campaign && data.campaign.status === 'running') {
+                    document.getElementById('send-btn').classList.add('hidden');
+                    document.getElementById('stop-btn').classList.remove('hidden');
+                    document.getElementById('prog-box').classList.remove('hidden');
+                    document.getElementById('prog-bar').style.width = `${data.campaign.progress}%`;
+                    document.getElementById('prog-text').innerText = `${Math.round(data.campaign.progress)}%`;
+                    document.getElementById('prog-count').innerText = `Kaldığı yerden devam ediliyor...`;
+                    
+                    const logContainer = document.getElementById('log-container');
+                    logContainer.innerHTML = '';
+                    data.campaign.logs.forEach(log => {
+                        const div = document.createElement('div');
+                        div.className = `p-3 rounded-xl text-[10px] font-bold ${log.type === 'error' ? 'bg-red-50 text-red-600' : log.type === 'success' ? 'bg-green-50 text-green-600' : log.type === 'wait' ? 'bg-yellow-50 text-yellow-600' : 'bg-slate-50 text-slate-600 border border-slate-100'}`;
+                        div.innerHTML = `[${new Date(log.timestamp).toLocaleTimeString()}] ${log.message}`;
+                        logContainer.appendChild(div);
+                    });
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                }
+            } catch (err) {
+                console.error('Kampanya durumu alınamadı', err);
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('clear-list-btn').addEventListener('click', clearList);
             initTemplates();
             loadGroups();
+            setTimeout(checkActiveCampaign, 1000); // 1 Sn sonra recover
         });
         switchTab('campaign');
     </script>
