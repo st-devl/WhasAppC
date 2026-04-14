@@ -283,7 +283,7 @@ process.on('uncaughtException', (err) => {
     console.error('⚠️ [CRITICAL] Uncaught Exception:', err);
 });
 
-const PORT = 3005;
+const PORT = process.env.PORT || 3005;
 server.listen(PORT, () => {
     console.log(`\n================================================`);
     console.log(`🌍 WhasAppC Pro Aktif: http://localhost:${PORT}`);
